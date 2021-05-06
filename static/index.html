@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>WebCodecs Video Chat</title>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+  <script src="main.js"></script>
+  <script type="text/javascript">
+    'use strict';
+
+    function log(msg) {
+      $('#log').append(msg.toString() + "\n\n");
+    }
+
+    async function main(arg) {
+      let constraints = {
+        audio: false,
+        video: {
+          width: { min: 720 },
+          height: { min: 480 }
+        }
+      };
+      let stream =
+        await window.navigator.mediaDevices.getUserMedia(constraints);
+      var track = stream.getTracks()[0];
+
+      let settings = track.getSettings();
+      let encoder_config = {
+        codec: 'vp8',
+        height: settings.height,
+        width: settings.width,
+        bitrate: 800000,
+        frameRate: settings.frameRate
+      };
+
+      let decoder_config = {
+        codec: 'vp8',
+        //codedHeight: settings.height,
+        //codedWidth: settings.width,
+      };
+
+      let display_renderer = new VideoRenderer('display');
+      let decoder = new RtcDecoder(decoder_config,
+        f => { display_renderer.show(f); },
+        e => { console.log(e); });
+
+      let vsocket = new VideoSocket('ws', track.clone(), encoder_config,
+        blob => { decoder.decode(blob); });
+      let media_processor = new MediaStreamTrackProcessor(track);
+      const reader = media_processor.readable.getReader();
+      let selfie_renderer = new VideoRenderer('selfie');
+
+
+      while (true) {
+        try {
+          const result = await reader.read();
+          let frame = result.value;
+          selfie_renderer.show(frame);
+        }
+        catch (e) {
+          console.log(e);
+          break;
+        }
+      }
+    }
+
+    window.onload = main;
+  </script>
+</head>
+
+<body>
+  <div>
+    <canvas id='selfie' width="720" height="480"></canvas>
+    <canvas id='display' width="720" height="480"></canvas>
+  </div>
+</body>
+
+</html>
