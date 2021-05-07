@@ -59,7 +59,10 @@ class VideoSocket {
     };
 
     this.socket.onmessage = (ev) => {
-      this.data_callback(ev.data);
+      if (typeof(ev.data) == "string")
+        console.log(ev.data);
+      else
+        this.data_callback(ev.data);
     };
 
     this.socket.onclose = () => {
@@ -97,6 +100,9 @@ class VideoSocket {
   }
 
   onChunkReady(chunk, md) {
+    if (chunk.type == 'key')
+      this.socket.send('key');
+
     this.socket.send(chunk.data);
   }
 
