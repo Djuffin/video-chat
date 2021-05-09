@@ -5,13 +5,18 @@ use log::*;
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
 use actix_files::Files;
+use actix_service::Service;
+use actix_web::http::{header::CACHE_CONTROL, HeaderValue};
+use actix_web::web::Bytes;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use actix_web::web::Bytes;
+use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 
 use std::collections::HashMap;
+
+#[macro_use]
+extern crate lazy_static;
 
 // Messages
 #[derive(Clone, Debug)]
@@ -24,14 +29,14 @@ struct VideoChunk {
 #[rtype(result = "()")]
 enum CoordinatorMessage {
     Connect {
-        id: u64,
+        id: u32,
         addr: Recipient<ClientMessage>,
     },
     Disconnect {
-        id: u64,
+        id: u32,
     },
     Video {
-        id: u64,
+        id: u32,
         chunk: VideoChunk,
     },
 }
@@ -39,17 +44,25 @@ enum CoordinatorMessage {
 #[derive(Clone, Message, Debug)]
 #[rtype(result = "()")]
 enum ClientMessage {
-    Video { id: u64, chunk: VideoChunk },
+    Video { id: u32, chunk: VideoChunk },
+    Connect { id: u32 },
+    Disconnect { id: u32 },
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ClientCommand {
+    action: &'static str,
+    id: u32,
 }
 
 // Actors
 #[derive(Default)]
 struct Coordinator {
-    clients: HashMap<u64, Recipient<ClientMessage>>,
+    clients: HashMap<u32, Recipient<ClientMessage>>,
 }
 
 struct Client {
-    id: u64,
+    id: u32,
     coordinator: Recipient<CoordinatorMessage>,
 }
 
@@ -62,24 +75,18 @@ impl Actor for Client {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         let addr = ctx.address();
-        if let Some(e) = self
-            .coordinator
-            .do_send(CoordinatorMessage::Connect {
-                id: self.id,
-                addr: addr.recipient(),
-            })
-            .err()
-        {
+        let msg = CoordinatorMessage::Connect {
+            id: self.id,
+            addr: addr.recipient(),
+        };
+        if let Some(e) = self.coordinator.do_send(msg).err() {
             error!("Connecting error: {}", e);
         }
     }
 
     fn stopping(&mut self, _: &mut Self::Context) -> Running {
-        if let Some(e) = self
-            .coordinator
-            .do_send(CoordinatorMessage::Disconnect { id: self.id })
-            .err()
-        {
+        let msg = CoordinatorMessage::Disconnect { id: self.id };
+        if let Some(e) = self.coordinator.do_send(msg).err() {
             error!("Disconnecting error: {}", e);
         }
         Running::Stop
@@ -93,17 +100,25 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for Client {
                 ctx.pong(&msg);
             }
             Ok(ws::Message::Pong(_)) => {
+                ctx.ping(b"");
             }
             Ok(ws::Message::Text(text)) => {}
             Ok(ws::Message::Binary(bin)) => {
+                let key_frame = bin.get(0) != Some(&0);
+                let mut total_data: Vec<u8> = Vec::new();
+                total_data.extend_from_slice(&self.id.to_le_bytes());
+                total_data.push(if key_frame { 1 } else { 0 });
+                total_data.extend_from_slice(&bin.as_ref()[1..]);
+
+                let video_chunk = VideoChunk {
+                    key_frame: key_frame,
+                    data: Bytes::from(total_data),
+                };
                 if let Some(e) = self
                     .coordinator
                     .do_send(CoordinatorMessage::Video {
                         id: self.id,
-                        chunk: VideoChunk {
-                            key_frame: true,
-                            data: bin,
-                        },
+                        chunk: video_chunk,
                     })
                     .err()
                 {
@@ -126,10 +141,37 @@ impl Handler<ClientMessage> for Client {
     fn handle(&mut self, msg: ClientMessage, ctx: &mut Self::Context) {
         match msg {
             ClientMessage::Video { id, chunk } => {
-                if chunk.key_frame {
-                    ctx.text("key!");
-                }
                 ctx.binary(chunk.data);
+            }
+            ClientMessage::Connect { id } => {
+                let cmd = ClientCommand {
+                    action: "connect",
+                    id: id,
+                };
+                ctx.text(serde_json::to_string(&cmd).unwrap());
+            }
+            ClientMessage::Disconnect { id } => {
+                let cmd = ClientCommand {
+                    action: "disconnect",
+                    id: id,
+                };
+                ctx.text(serde_json::to_string(&cmd).unwrap());
+            }
+        }
+    }
+}
+
+impl Coordinator {
+    fn send_all_client_except_one(&mut self, id: u32, msg: ClientMessage) {
+        for (client_id, client) in self.clients.iter() {
+            if *client_id == id {
+                continue;
+            }
+            if let Some(e) = client.do_send(msg.clone()).err() {
+                error!(
+                    "Error sending message to client. id:{} error: {}",
+                    client_id, e
+                );
             }
         }
     }
@@ -141,29 +183,41 @@ impl Handler<CoordinatorMessage> for Coordinator {
     fn handle(&mut self, msg: CoordinatorMessage, ctx: &mut Self::Context) {
         match msg {
             CoordinatorMessage::Connect { id, addr } => {
-                self.clients.insert(id, addr);
+                info!("Client connected {}", id);
+                let existing_clients: Vec<u32> = self.clients.keys().cloned().collect();
+                self.clients.insert(id, addr.clone());
+                self.send_all_client_except_one(id, ClientMessage::Connect { id: id });
+                for id in existing_clients {
+                    let _ = addr.do_send(ClientMessage::Connect { id: id });
+                }
             }
             CoordinatorMessage::Disconnect { id } => {
+                info!("Client disconnected {}", id);
                 self.clients.remove(&id);
+                self.send_all_client_except_one(id, ClientMessage::Disconnect { id: id });
             }
             CoordinatorMessage::Video { id, chunk } => {
-                for (client_id, client) in self.clients.iter() {
-                    if *client_id == id {
-                        continue;
-                    }
-                    if let Some(e) = client
-                        .do_send(ClientMessage::Video {
-                            id: id,
-                            chunk: chunk.clone(),
-                        })
-                        .err()
-                    {
-                        error!("Error sending video blob to client {}", e);
-                    }
-                }
+                self.send_all_client_except_one(
+                    id,
+                    ClientMessage::Video {
+                        id: id,
+                        chunk: chunk,
+                    },
+                );
             }
         }
     }
+}
+
+lazy_static! {
+    static ref COUNTER: Mutex<u32> = Mutex::new(1);
+}
+
+fn get_next_client_id() -> u32 {
+    let mut guard = COUNTER.lock().unwrap();
+    let value = *guard;
+    *guard += 1;
+    value
 }
 
 async fn websocket_rout(
@@ -171,9 +225,7 @@ async fn websocket_rout(
     stream: web::Payload,
     coordinator: web::Data<Addr<Coordinator>>,
 ) -> Result<HttpResponse, Error> {
-    let mut hasher = DefaultHasher::new();
-    req.peer_addr().hash(&mut hasher);
-    let id = hasher.finish();
+    let id = get_next_client_id();
     ws::start(
         Client {
             id: id,
@@ -195,7 +247,16 @@ async fn main() -> std::io::Result<()> {
     let srv = HttpServer::new(move || {
         App::new()
             .data(coordinator.clone())
-            .service(web::resource("/ws/").to(websocket_rout))
+            .wrap_fn(|req, srv| {
+                let fut = srv.call(req);
+                async {
+                    let mut res = fut.await?;
+                    res.headers_mut()
+                        .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+                    Ok(res)
+                }
+            })
+            .service(web::resource("/vs-socket/").to(websocket_rout))
             .service(Files::new("/", "./static/").index_file("index.html"))
     })
     .bind(&addr)?;

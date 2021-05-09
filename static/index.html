@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <title>WebCodecs Video Chat</title>
   <style>
-    #display {
+    interlocutor {
       padding: 10px;
       background: gold;
     }
@@ -30,11 +30,9 @@
   <script type="text/javascript">
     'use strict';
 
-    function log(msg) {
-      $('#log').append(msg.toString() + "\n\n");
-    }
-
     async function main(arg) {
+      let codec_string = 'vp8';
+      codec_string = 'vp09.00.10.08';
       let constraints = {
         audio: false,
         video: {
@@ -48,42 +46,24 @@
 
       let settings = track.getSettings();
       let encoder_config = {
-        codec: 'vp8',
+        codec: codec_string,
         height: settings.height,
         width: settings.width,
-        bitrate: 800000,
+        bitrate: 600000,
         frameRate: settings.frameRate
       };
 
       let decoder_config = {
-        codec: 'vp8',
-        //codedHeight: settings.height,
-        //codedWidth: settings.width,
+        codec: codec_string,
+        codedHeight: settings.height,
+        codedWidth: settings.width,
       };
 
-      let display_renderer = new VideoRenderer('display');
-      let decoder = new RtcDecoder(decoder_config,
-        f => { display_renderer.show(f); },
-        e => { console.log(e); });
-
-      let vsocket = new VideoSocket('ws', track.clone(), encoder_config,
-        blob => { decoder.decode(blob); });
-      let media_processor = new MediaStreamTrackProcessor(track);
-      const reader = media_processor.readable.getReader();
-      let selfie_renderer = new VideoRenderer('selfie');
-
-
-      while (true) {
-        try {
-          const result = await reader.read();
-          let frame = result.value;
-          selfie_renderer.show(frame);
-        }
-        catch (e) {
-          console.log(e);
-          break;
-        }
-      }
+      let canvas_manager = new CanvasManager('videos');
+      let server = new ServerSocket(track, encoder_config, canvas_manager);
+      window.__server = server;
+      server.setSelfieCanvas(document.getElementById('selfie'));
+      server.processFrames();
     }
 
     window.onload = main;
@@ -91,9 +71,8 @@
 </head>
 
 <body>
-  <div>
+  <div id='videos'>
     <canvas id='selfie' width="720" height="480"></canvas>
-    <canvas id='display' width="720" height="480"></canvas>
   </div>
 </body>
 
