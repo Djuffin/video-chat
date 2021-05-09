@@ -10,6 +10,7 @@ use actix_web::http::{header::CACHE_CONTROL, HeaderValue};
 use actix_web::web::Bytes;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
+use actix_http::ws::Codec;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -125,6 +126,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for Client {
                     error!("Error sending video blob to coordinator {}", e);
                 }
             }
+            Ok(ws::Message::Continuation(cont)) => {
+                error!("Continuation {:?}", cont);
+            }
             Ok(ws::Message::Close(reason)) => {
                 info!("Close: {:?}", reason);
                 ctx.close(reason);
@@ -226,14 +230,15 @@ async fn websocket_rout(
     coordinator: web::Data<Addr<Coordinator>>,
 ) -> Result<HttpResponse, Error> {
     let id = get_next_client_id();
-    ws::start(
-        Client {
-            id: id,
-            coordinator: coordinator.get_ref().clone().recipient(),
-        },
-        &req,
-        stream,
-    )
+    let actor = Client {
+        id: id,
+        coordinator: coordinator.get_ref().clone().recipient(),
+    };
+
+    let mut res = ws::handshake(&req)?;
+    let codec = Codec::new().max_size(1024 * 1024);
+    Ok(res.streaming(ws::WebsocketContext::with_codec(actor, stream, codec)))
+    //ws::start(actor, &req, stream)
 }
 
 #[actix_web::main]

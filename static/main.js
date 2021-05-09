@@ -1,20 +1,5 @@
 'use strict';
 
-class VideoRenderer {
-  canvas = null;
-  ctx = null;
-
-  constructor(canvas_id) {
-    this.canvas = document.getElementById(canvas_id);
-    this.ctx = this.canvas.getContext('2d');
-  }
-
-  show(frame) {
-    this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height);
-    frame.close();
-  }
-}
-
 class Interlocutor {
   id = 0;
   canvas = null;
@@ -229,102 +214,11 @@ class ServerSocket {
     let key_frame_prefix = new Uint8Array([chunk.type == 'key' ? 1 : 0]);
     let blob = new Blob([key_frame_prefix, chunk.data]);
     if (this.socket) {
-      console.log("Sending: " + blob.size);
       this.socket.send(blob);
     }
   }
 
   onError(error) {
     console.log(error);
-  }
-}
-
-class VideoSocket {
-  reader = null;
-  media_processor = null;
-  track = null;
-  encoder = null;
-  socket = null;
-  keep_going = true;
-
-  constructor(name, track, config, data_callback) {
-    const { location } = window;
-    const proto = location.protocol.startsWith('https') ? 'wss' : 'ws';
-    const uri = `${proto}://${location.host}/${name}/`;
-    this.socket = new WebSocket(uri);
-    this.socket.binaryType = 'arraybuffer';
-    this.data_callback = data_callback;
-
-    this.socket.onopen = () => {
-      console.log("Connected...");
-      try {
-        this.processFrames();
-      }
-      catch (e) {
-        console.log(e);
-      }
-    };
-
-    this.socket.onmessage = (ev) => {
-      if (typeof (ev.data) == "string")
-        console.log(ev.data);
-      else {
-        try {
-          this.data_callback(ev.data);
-        }
-        catch (e) {
-          console.log(e);
-        }
-      }
-    };
-
-    this.socket.onclose = () => {
-      console.log('Disconnected...')
-      this.socket = null;
-    };
-
-    this.encoder = new VideoEncoder({
-      output: this.onChunkReady.bind(this),
-      error: this.onError.bind(this)
-    });
-    this.encoder.configure(config);
-
-    this.track = track;
-    this.media_processor = new MediaStreamTrackProcessor(track);
-    this.reader = this.media_processor.readable.getReader();
-
-    console.log(`VideoSocket created ${name} ${JSON.stringify(config)}`);
-  }
-
-  async processFrames() {
-    let counter = 0;
-    while (this.keep_going) {
-      try {
-        const result = await this.reader.read();
-        let frame = result.value;
-        let keyFrame = (counter % 60 == 0);
-        counter++;
-        this.encoder.encode(frame, { keyFrame: keyFrame });
-        frame.close();
-      }
-      catch (e) {
-        onError(e);
-      }
-    }
-  }
-
-  onChunkReady(chunk, md) {
-    if (md.decoderConfig) {
-      console.log(JSON.stringify(md.decoderConfig));
-    }
-    let key_frame_prefix = new Uint8Array([chunk.type == 'key' ? 1 : 0]);
-    let blob = new Blob([key_frame_prefix, chunk.data]);
-    if (this.socket)
-      this.socket.send(blob);
-  }
-
-  onError(error) {
-    console.log(error);
-    this.keep_going = false;
   }
 }
