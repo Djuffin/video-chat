@@ -260,37 +260,31 @@ async fn main() -> std::io::Result<()> {
         .filter(None, LevelFilter::Info)
         .init();
 
-    let coordinator1 = Coordinator::default().start();
-    let coordinator2 = Coordinator::default().start();
-    let coordinator3 = Coordinator::default().start();
+    let mut coordinators: Vec<Addr<Coordinator>> = vec![];
+    for i in 0..5 {
+        coordinators.push(Coordinator::default().start())
+    }
 
     HttpServer::new(move || {
-        App::new()
-            .wrap_fn(|req, srv| {
-                let fut = srv.call(req);
-                async {
-                    let mut res = fut.await?;
-                    res.headers_mut()
-                        .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-                    Ok(res)
-                }
-            })
-            .service(
-                web::resource("/vc-room1/")
-                    .data(coordinator1.clone())
+        let mut app = App::new().wrap_fn(|req, srv| {
+            let fut = srv.call(req);
+            async {
+                let mut res = fut.await?;
+                res.headers_mut()
+                    .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+                Ok(res)
+            }
+        });
+
+        for (i, coordinator) in coordinators.iter().enumerate() {
+            app = app.service(
+                web::resource(format!("/vc-room{}/", i))
+                    .data(coordinator.clone())
                     .to(vc_socket_route),
-            )
-            .service(
-                web::resource("/vc-room2/")
-                    .data(coordinator2.clone())
-                    .to(vc_socket_route),
-            )
-            .service(
-                web::resource("/vc-room3/")
-                    .data(coordinator3.clone())
-                    .to(vc_socket_route),
-            )
-            .service(Files::new("/vc", "./static/").index_file("index.html"))
+            );
+        }
+
+        app.service(Files::new("/vc", "./static/").index_file("index.html"))
             .service(redirect_to_spec)
     })
     .bind(format!("0.0.0.0:{0}", port))?

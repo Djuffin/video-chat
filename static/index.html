@@ -64,8 +64,8 @@
 
     async function main(arg) {
       let codec_string = 'vp8';
-      codec_string = 'vp09.00.10.08';
-      //codec_string = 'avc1.42001E';
+      //codec_string = 'vp09.00.10.08';
+      codec_string = 'avc1.42001E';
       let width = 720;
       let height = 480;
       let constraints = {
@@ -98,7 +98,7 @@
         codec: codec_string,
         height: height,
         width: width,
-        bitrate: 1000000,
+        bitrate: 2500000,
         frameRate: settings.frameRate,
         hardwareAcceleration: "deny",
       };
