@@ -9,9 +9,11 @@ use actix_http::ws::Codec;
 use actix_service::Service;
 use actix_web::http::{header::CACHE_CONTROL, header::LOCATION, HeaderValue};
 use actix_web::web::Bytes;
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_web_actors::ws;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Mutex;
 
 use std::collections::HashMap;
@@ -260,6 +262,14 @@ async fn main() -> std::io::Result<()> {
         .filter(None, LevelFilter::Info)
         .init();
 
+    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+    if Path::new("./key.pem").exists() && Path::new("./cert.pem").exists() {
+        builder
+            .set_private_key_file("key.pem", SslFiletype::PEM)
+            .unwrap();
+        builder.set_certificate_chain_file("cert.pem").unwrap();
+    }
+
     let mut coordinators: Vec<Addr<Coordinator>> = vec![];
     for i in 0..5 {
         coordinators.push(Coordinator::default().start())
@@ -288,6 +298,7 @@ async fn main() -> std::io::Result<()> {
             .service(redirect_to_spec)
     })
     .bind(format!("0.0.0.0:{0}", port))?
+    .bind_openssl("127.0.0.1:443", builder)?
     .run()
     .await
 }
