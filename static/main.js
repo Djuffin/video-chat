@@ -85,7 +85,74 @@ class CanvasManager {
     let canvas = document.getElementById("interlocutor_" + id);
     canvas.parentElement.removeChild(canvas);
   }
+}
 
+function delay(time_ms) {
+  return new Promise((resolve, reject) => {
+    setTimeout(resolve, time_ms);
+  });
+};
+
+class BandwidthCounter {
+  upload_bytes = 0;
+  download_bytes = 0;
+  last_timestamp = 0;
+  dropped_frames = 0;
+  usage = { upload_kbps: 0, download_kbps: 0, dropped_frames: 0 };
+  keep_going = true;
+
+  constructor(stats_id) {
+    this.last_timestamp = performance.now();
+    this.stats_div = document.getElementById(stats_id);
+  }
+
+  reportUpload(bytes) {
+    this.upload_bytes += bytes;
+  }
+
+  reportDownload(bytes) {
+    this.download_bytes += bytes;
+  }
+
+  reportDroppedFrame() {
+    this.usage.dropped_frames++;
+  }
+
+  async start() {
+    this.upload_bytes = 0;
+    this.download_bytes = 0;
+    this.keep_going = true;
+
+    while (this.keep_going) {
+      let now = performance.now();
+      let time_passed_sec = (now - this.last_timestamp) / 1000;
+      this.last_timestamp = now;
+      this.usage.download_kbps = this.download_bytes * 8 / 1000 / time_passed_sec;
+      this.usage.upload_kbps = this.upload_bytes * 8 / 1000 / time_passed_sec;
+      this.download_bytes = 0;
+      this.upload_bytes = 0;
+      this.showStats();
+      await delay(1000);
+    }
+  }
+
+  showStats() {
+    if (this.stats_div) {
+      let down = Math.round(this.usage.download_kbps);
+      let up = Math.round(this.usage.upload_kbps);
+      let drop_count = this.usage.dropped_frames;
+      let text = `UP : ${up}Kbps DOWN : ${down}Kbps DROP: ${drop_count}`;
+      this.stats_div.innerText = text;
+    }
+  }
+
+  getBandwidthUsage() {
+    return this.usage;
+  }
+
+  stop() {
+    keep_going = false;
+  }
 }
 
 class ServerSocket {
@@ -100,15 +167,18 @@ class ServerSocket {
   canvas_manager = null;
   config = null;
 
-  constructor(track, config, canvas_manager) {
+
+  constructor(room, track, config, canvas_manager, stats_id) {
     const { location } = window;
     const proto = location.protocol.startsWith('https') ? 'wss' : 'ws';
-    const uri = `${proto}://${location.host}/vs-socket/`;
+    const uri = `${proto}://${location.host}/vc-${room}/`;
     this.socket = new WebSocket(uri);
     this.socket.binaryType = 'arraybuffer';
+    this.bw_counter = new BandwidthCounter(stats_id);
 
     this.socket.onopen = () => {
       console.log("Connected to " + uri);
+      this.bw_counter.start();
     };
 
     this.socket.onmessage = (ev) => {
@@ -129,6 +199,7 @@ class ServerSocket {
     this.socket.onclose = () => {
       console.log('Disconnected from ' + uri);
       this.socket = null;
+      this.bw_counter.stop();
     };
 
     this.encoder = new VideoEncoder({
@@ -154,6 +225,7 @@ class ServerSocket {
   }
 
   processDataFromServer(data) {
+    this.bw_counter.reportDownload(data.byteLength);
     let view = new DataView(data);
     let id = view.getUint32(0, true);
     let interlocutor = this.interlocutors.get(id);
@@ -180,30 +252,65 @@ class ServerSocket {
     }
   }
 
+  renderSelfie(frame) {
+    if (!this.selfie)
+      return frame;
+    let ctx = this.selfie.context;
+    this.selfie.context.drawImage(frame, 0, 0, this.selfie.canvas.width,
+      this.selfie.canvas.height);
+  }
+
+  toggleWatermark() {
+    if (this.watermark) {
+      this.watermark = null;
+      return false;
+    } else {
+      this.watermark = {
+        canvas: new OffscreenCanvas(this.selfie.canvas.width, this.selfie.canvas.height)
+      };
+      this.watermark.context = this.watermark.canvas.getContext('2d')
+      return true;
+    }
+  }
+
+  addWatermark(frame) {
+    if (!this.selfie || !this.watermark)
+      return frame;
+    let ctx = this.watermark.context;
+    ctx.globalAlpha = 0.3;
+    ctx.drawImage(frame, 0, 0, this.watermark.canvas.width,
+      this.watermark.canvas.height);
+    ctx.font = '14px monospace';
+    ctx.fillText("🎞️WebCodecs", 5, 25);
+    ctx.fillStyle = "#2A252C";
+    let result = new VideoFrame(this.watermark.canvas, { timestamp: frame.timestamp });
+    frame.close();
+    return result;
+  }
+
   async processFrames() {
     let counter = 0;
     while (this.keep_going) {
       counter++;
-      if (counter % 100 == 0)
+      if (counter % 120 == 0)
         this.force_keyframe = true;
 
       const result = await this.reader.read();
       let frame = result.value;
-      if (this.selfie) {
-        this.selfie.context.drawImage(frame, 0, 0, this.selfie.canvas.width,
-          this.selfie.canvas.height);
-      }
+      frame = this.addWatermark(frame);
+      this.renderSelfie(frame);
 
-      let too_much_data_in_flight = this.socket.bufferedAmount > 1;
-      if (this.socket.readyState == WebSocket.OPEN && !too_much_data_in_flight) {
+      const dropThreshold = 15 * 1024; //15Kb
+      let dropFrame = this.socket.bufferedAmount > dropThreshold;
+      if (dropFrame) {
+        this.bw_counter.reportDroppedFrame();
+      } else if (this.socket.readyState == WebSocket.OPEN && !dropFrame) {
+        if (this.force_keyframe)
+          console.log("keyframe!");
         this.encoder.encode(frame, { keyFrame: this.force_keyframe });
         this.force_keyframe = false;
       }
-      try {
-        frame.close();
-      } catch {
-        // In case encode() closes frames
-      }
+      try { frame.close(); } catch { /* In case encode() closes frames */ }
     }
   }
 
@@ -215,6 +322,7 @@ class ServerSocket {
     let blob = new Blob([key_frame_prefix, chunk.data]);
     if (this.socket) {
       this.socket.send(blob);
+      this.bw_counter.reportUpload(blob.size);
     }
   }
 

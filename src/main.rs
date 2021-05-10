@@ -5,12 +5,12 @@ use log::*;
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
 use actix_files::Files;
+use actix_http::ws::Codec;
 use actix_service::Service;
-use actix_web::http::{header::CACHE_CONTROL, HeaderValue};
+use actix_web::http::{header::CACHE_CONTROL, header::LOCATION, HeaderValue};
 use actix_web::web::Bytes;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
-use actix_http::ws::Codec;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -224,7 +224,14 @@ fn get_next_client_id() -> u32 {
     value
 }
 
-async fn websocket_rout(
+#[actix_web::get("/")]
+async fn redirect_to_spec() -> HttpResponse {
+    HttpResponse::PermanentRedirect()
+        .header(LOCATION, "https://www.w3.org/TR/webcodecs/")
+        .finish()
+}
+
+async fn vc_socket_route(
     req: HttpRequest,
     stream: web::Payload,
     coordinator: web::Data<Addr<Coordinator>>,
@@ -238,20 +245,27 @@ async fn websocket_rout(
     let mut res = ws::handshake(&req)?;
     let codec = Codec::new().max_size(1024 * 1024);
     Ok(res.streaming(ws::WebsocketContext::with_codec(actor, stream, codec)))
-    //ws::start(actor, &req, stream)
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let port = args
+        .get(1)
+        .unwrap_or(&"80".to_string())
+        .parse::<u32>()
+        .unwrap_or(80);
+
     env_logger::Builder::new()
         .filter(None, LevelFilter::Info)
         .init();
 
-    let addr = "127.0.0.1:8080";
-    let coordinator = Coordinator::default().start();
-    let srv = HttpServer::new(move || {
+    let coordinator1 = Coordinator::default().start();
+    let coordinator2 = Coordinator::default().start();
+    let coordinator3 = Coordinator::default().start();
+
+    HttpServer::new(move || {
         App::new()
-            .data(coordinator.clone())
             .wrap_fn(|req, srv| {
                 let fut = srv.call(req);
                 async {
@@ -261,9 +275,25 @@ async fn main() -> std::io::Result<()> {
                     Ok(res)
                 }
             })
-            .service(web::resource("/vs-socket/").to(websocket_rout))
-            .service(Files::new("/", "./static/").index_file("index.html"))
+            .service(
+                web::resource("/vc-room1/")
+                    .data(coordinator1.clone())
+                    .to(vc_socket_route),
+            )
+            .service(
+                web::resource("/vc-room2/")
+                    .data(coordinator2.clone())
+                    .to(vc_socket_route),
+            )
+            .service(
+                web::resource("/vc-room3/")
+                    .data(coordinator3.clone())
+                    .to(vc_socket_route),
+            )
+            .service(Files::new("/vc", "./static/").index_file("index.html"))
+            .service(redirect_to_spec)
     })
-    .bind(&addr)?;
-    srv.run().await
+    .bind(format!("127.0.0.1:{0}", port))?
+    .run()
+    .await
 }

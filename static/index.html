@@ -15,31 +15,57 @@
       border-radius: 25px;
     }
 
+    .dashboard {
+      width: 99%;
+      background-color: #7E6F85;
+      margin: 5px;
+      padding: 5px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    .dashboard span {
+      color: orange;
+      font-size: 20px;
+    }
+
+    .dashboard button {
+      background-color: #EBFFF7;
+      border: double;
+      color: #2A252C;
+      padding: 10px 10px;
+      text-align: center;
+      display: block;
+      font-size: 14px;
+      border-radius: 5px;
+    }
+
+    #stats-for-nerds {
+      color: #FAFFFD;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      padding: 5px;
+      background: #7E6F85;
+      border-radius: 5px;
+      width: 600px;
+      position: absolute;
+      bottom: 5px;
+      right: 5px;
+    }
+
     #selfie {
       padding: 10px;
       background: #9FD356;
       border-radius: 25px;
     }
-
-    button {
-      background-color: #555555;
-      border: none;
-      color: white;
-      padding: 15px 32px;
-      width: 150px;
-      text-align: center;
-      display: block;
-      font-size: 16px;
-    }
   </style>
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
-  <script src="main.js"></script>
+  <script src="/vc/main.js"></script>
   <script type="text/javascript">
     'use strict';
 
     async function main(arg) {
       let codec_string = 'vp8';
       codec_string = 'vp09.00.10.08';
+      //codec_string = 'avc1.42001E';
       let width = 720;
       let height = 480;
       let constraints = {
@@ -50,9 +76,22 @@
           frameRate: 24
         }
       };
-      let stream =
-        await window.navigator.mediaDevices.getUserMedia(constraints);
+
+      let room = "room1";
+      let search_params = new URLSearchParams(window.location.search)
+      if (search_params.has("room"))
+        room = search_params.get('room');
+
+      $(".dashboard button").hide();
+      $("#videos").hide();
+      $(".dashboard span").show();
+
+      let stream = await window.navigator.mediaDevices.getUserMedia(constraints);
       var track = stream.getTracks()[0];
+
+      $(".dashboard span").hide();
+      $(".dashboard button").show();
+      $("#videos").show();
 
       let settings = track.getSettings();
       let encoder_config = {
@@ -60,8 +99,11 @@
         height: height,
         width: width,
         bitrate: 1000000,
-        frameRate: settings.frameRate
+        frameRate: settings.frameRate,
+        hardwareAcceleration: "deny",
       };
+      if (codec_string.startsWith('avc'))
+        encoder_config.avc = { format: "annexb" };
 
       let decoder_config = {
         codec: codec_string,
@@ -71,9 +113,20 @@
       };
 
       let canvas_manager = new CanvasManager('videos');
-      let server = new ServerSocket(track, encoder_config, canvas_manager);
+      let server = new ServerSocket(room, track, encoder_config,
+                                    canvas_manager, 'stats-for-nerds');
       window.__server = server;
       server.setSelfieCanvas(document.getElementById('selfie'));
+
+      let watermarkButton = document.querySelector(".dashboard button");
+      watermarkButton.onclick = _ => {
+        if (server.toggleWatermark()) {
+          watermarkButton.innerText = "✅" + watermarkButton.innerText.substring(1);
+        } else {
+          watermarkButton.innerText = "⬜" + watermarkButton.innerText.substring(1);
+        }
+      };
+
       server.processFrames();
     }
 
@@ -82,9 +135,14 @@
 </head>
 
 <body>
+  <div class='dashboard'>
+    <span>Waiting for camera! Please allow access to camera.</span>
+    <button>⬜Neo Mode! (canary only :( )</button>
+  </div>
   <div id='videos'>
     <canvas id='selfie' width="720" height="480"></canvas>
   </div>
+  <div id='stats-for-nerds'></div>
 </body>
 
 </html>
