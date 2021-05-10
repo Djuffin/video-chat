@@ -293,7 +293,7 @@ async fn main() -> std::io::Result<()> {
             .service(Files::new("/vc", "./static/").index_file("index.html"))
             .service(redirect_to_spec)
     })
-    .bind(format!("127.0.0.1:{0}", port))?
+    .bind(format!("0.0.0.0:{0}", port))?
     .run()
     .await
 }
