@@ -2,6 +2,8 @@
 #![allow(unused_variables)]
 use log::*;
 
+use std::fs::File;
+use std::io::BufReader;
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
 use actix_files::Files;
@@ -11,7 +13,8 @@ use actix_web::http::{header::CACHE_CONTROL, header::LOCATION, HeaderValue};
 use actix_web::web::Bytes;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rustls::internal::pemfile::{certs, pkcs8_private_keys};
+use rustls::{NoClientAuth, ServerConfig};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
@@ -262,12 +265,15 @@ async fn main() -> std::io::Result<()> {
         .filter(None, LevelFilter::Info)
         .init();
 
-    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
-    if Path::new("./key.pem").exists() && Path::new("./cert.pem").exists() {
-        builder
-            .set_private_key_file("./key.pem", SslFiletype::PEM)
-            .unwrap();
-        builder.set_certificate_chain_file("./cert.pem").unwrap();
+    let mut config = ServerConfig::new(NoClientAuth::new());
+    if Path::new("key.pem").exists() && Path::new("cert.pem").exists() {
+        let cert_file = &mut BufReader::new(File::open("cert.pem")?);
+        let key_file = &mut BufReader::new(File::open("key.pem")?);
+        let cert_chain = certs(cert_file).unwrap();
+        let mut keys = pkcs8_private_keys(key_file).unwrap();
+        if keys.len() > 0 {
+            config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
+        }
     }
 
     let mut coordinators: Vec<Addr<Coordinator>> = vec![];
@@ -298,7 +304,7 @@ async fn main() -> std::io::Result<()> {
             .service(redirect_to_spec)
     })
     .bind(format!("0.0.0.0:{0}", port))?
-    .bind_openssl("0.0.0.0:443", builder)?
+    .bind_rustls("0.0.0.0:443", config)?
     .run()
     .await
 }
