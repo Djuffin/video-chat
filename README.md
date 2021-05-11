@@ -4,7 +4,7 @@ A web video chat based on new [WebCodecs API](https://www.w3.org/TR/webcodecs/) 
 
 So far only video is transmitted, so only sign language conversations are possible :)
 
-Backend: www.rust-lang.org, actix.rs
+Backend: [Rust](www.rust-lang.org), [Actix](actix.rs)
 This videochat only works in Chrome 90+.
 
 
