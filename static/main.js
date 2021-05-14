@@ -21,7 +21,8 @@ class Interlocutor {
   }
 
   render(frame) {
-    this.ctx.drawImage(frame, 0, 0);
+    this.ctx.drawImage(frame, 0, 0, this.config.visibleRegion.width,
+                       this.config.visibleRegion.height);
     frame.close();
   }
 
@@ -264,7 +265,8 @@ class ServerSocket {
   renderSelfie(frame) {
     if (!this.selfie)
       return frame;
-    this.selfie.context.drawImage(frame, 0, 0);
+    this.selfie.context.drawImage(frame, 0, 0, this.encoder_config.width,
+                                  this.encoder_config.height);
   }
 
   toggleWatermark() {
@@ -286,7 +288,8 @@ class ServerSocket {
       return frame;
     let ctx = this.watermark.context;
     ctx.globalAlpha = 0.3;
-    ctx.drawImage(frame, 0, 0);
+    ctx.drawImage(frame, 0, 0, this.encoder_config.width,
+                  this.encoder_config.height);
     ctx.font = '14px monospace';
     ctx.fillText("🎞️WebCodecs", 5, 25);
     ctx.fillStyle = "#2A252C";
