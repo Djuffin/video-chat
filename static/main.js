@@ -10,13 +10,18 @@ class Interlocutor {
   constructor(config, id, canvas) {
     this.id = id;
     this.config = config;
-
     this.canvas = canvas;
+
+    var scale = window.devicePixelRatio;
+    this.canvas.width = config.visibleRegion.width / scale;
+    this.canvas.height = config.visibleRegion.height / scale;
+
     this.ctx = this.canvas.getContext('2d');
+    this.ctx.scale(1.0 / scale, 1.0 / scale);
   }
 
   render(frame) {
-    this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height);
+    this.ctx.drawImage(frame, 0, 0);
     frame.close();
   }
 
@@ -64,8 +69,6 @@ class Interlocutor {
 
 class CanvasManager {
   parent = null;
-  width = 720;
-  height = 480;
 
   constructor(parent_id) {
     parent = document.getElementById(parent_id);
@@ -73,8 +76,6 @@ class CanvasManager {
 
   addCanvas(id) {
     let canvas = document.createElement("canvas");
-    canvas.height = this.height;
-    canvas.width = this.width;
     canvas.id = "interlocutor_" + id;
     canvas.classList.add('interlocutor');
     parent.appendChild(canvas);
@@ -142,7 +143,7 @@ class BandwidthCounter {
       let up = Math.round(this.usage.upload_kbps);
       let drop_count = this.usage.dropped_frames;
       let text = `UP : ${up}Kbps DOWN : ${down}Kbps DROP: ${drop_count}`;
-      this.stats_div.innerText = text;
+      this.stats_div.textContent = text;
     }
   }
 
@@ -165,10 +166,11 @@ class ServerSocket {
   selfie = null;
   interlocutors = new Map();
   canvas_manager = null;
-  config = null;
+  encoder_config = null;
+  decoder_config = null;
 
 
-  constructor(room, track, config, canvas_manager, stats_id) {
+  constructor(room, track, encoder_config, decoder_config, canvas_manager, stats_id) {
     const { location } = window;
     const proto = location.protocol.startsWith('https') ? 'wss' : 'ws';
     const uri = `${proto}://${location.host}/vc-${room}/`;
@@ -206,15 +208,18 @@ class ServerSocket {
       output: this.onChunkReady.bind(this),
       error: this.onError.bind(this)
     });
-    this.encoder.configure(config);
+    this.encoder.configure(encoder_config);
 
-    this.config = config;
+    this.encoder_config = encoder_config;
+    this.decoder_config = decoder_config;
     this.canvas_manager = canvas_manager;
     this.track = track;
     this.media_processor = new MediaStreamTrackProcessor(track);
     this.reader = this.media_processor.readable.getReader();
 
-    console.log(`ServerSocket created ${uri} ${JSON.stringify(config)}`);
+    console.log(`ServerSocket created ${uri}`);
+    console.log(`Encoder config ${JSON.stringify(this.encoder_config)}`);
+    console.log(`Decoder config ${JSON.stringify(this.decoder_config)}`);
   }
 
   setSelfieCanvas(canvas) {
@@ -222,6 +227,10 @@ class ServerSocket {
       canvas: canvas,
       context: canvas.getContext('2d')
     };
+    var scale = window.devicePixelRatio;
+    this.selfie.canvas.width = this.encoder_config.width / scale;
+    this.selfie.canvas.height = this.encoder_config.height / scale;
+    this.selfie.context.scale(1.0 / scale, 1.0 / scale);
   }
 
   processDataFromServer(data) {
@@ -247,7 +256,7 @@ class ServerSocket {
     } else if (msg.action == 'connect') {
       this.force_keyframe = true;
       let canvas = this.canvas_manager.addCanvas(msg.id);
-      let interlocutor = new Interlocutor(this.config, msg.id, canvas);
+      let interlocutor = new Interlocutor(this.decoder_config, msg.id, canvas);
       this.interlocutors.set(msg.id, interlocutor);
     }
   }
@@ -255,9 +264,7 @@ class ServerSocket {
   renderSelfie(frame) {
     if (!this.selfie)
       return frame;
-    let ctx = this.selfie.context;
-    this.selfie.context.drawImage(frame, 0, 0, this.selfie.canvas.width,
-      this.selfie.canvas.height);
+    this.selfie.context.drawImage(frame, 0, 0);
   }
 
   toggleWatermark() {
@@ -266,7 +273,8 @@ class ServerSocket {
       return false;
     } else {
       this.watermark = {
-        canvas: new OffscreenCanvas(this.selfie.canvas.width, this.selfie.canvas.height)
+        canvas: new OffscreenCanvas(this.encoder_config.width,
+                                    this.encoder_config.height)
       };
       this.watermark.context = this.watermark.canvas.getContext('2d')
       return true;
@@ -278,8 +286,7 @@ class ServerSocket {
       return frame;
     let ctx = this.watermark.context;
     ctx.globalAlpha = 0.3;
-    ctx.drawImage(frame, 0, 0, this.watermark.canvas.width,
-      this.watermark.canvas.height);
+    ctx.drawImage(frame, 0, 0);
     ctx.font = '14px monospace';
     ctx.fillText("🎞️WebCodecs", 5, 25);
     ctx.fillStyle = "#2A252C";

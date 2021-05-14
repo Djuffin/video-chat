@@ -115,7 +115,7 @@
       };
 
       let canvas_manager = new CanvasManager('videos');
-      let server = new ServerSocket(room, track, encoder_config,
+      let server = new ServerSocket(room, track, encoder_config, decoder_config,
                                     canvas_manager, 'stats-for-nerds');
       window.__server = server;
       server.setSelfieCanvas(document.getElementById('selfie'));
