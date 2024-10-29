@@ -153,7 +153,7 @@ class BandwidthCounter {
   }
 
   stop() {
-    keep_going = false;
+    this.keep_going = false;
   }
 }
 
@@ -320,7 +320,7 @@ class ServerSocket {
         this.encoder.encode(frame, { keyFrame: this.force_keyframe });
         this.force_keyframe = false;
       }
-      try { frame.close(); } catch { /* In case encode() closes frames */ }
+      frame.close();
     }
   }
 

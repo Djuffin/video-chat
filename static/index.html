@@ -3,7 +3,6 @@
 
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="origin-trial" content="ArsuLnKeONF+gTTYrKx5v5sPCBNrjBUP+fthdyUNIZ4AMO/WxVbXCmJVQPajy4ncaqWc7kQGX5GfKj4FmrdWRAYAAABjeyJvcmlnaW4iOiJodHRwczovL3dlYmNvZGVjcy5vcmc6NDQzIiwiZmVhdHVyZSI6IldlYkNvZGVjcyIsImV4cGlyeSI6MTYyNjIyMDc5OSwiaXNTdWJkb21haW4iOnRydWV9">
 
   <title>WebCodecs Video Chat</title>
   <style>
@@ -102,7 +101,7 @@
         width: width,
         bitrate: 1000000,
         frameRate: settings.frameRate,
-        hardwareAcceleration: "allow",
+        //acceleration: "",
       };
       if (codec_string.startsWith('avc'))
         encoder_config.avc = { format: "annexb" };

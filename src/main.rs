@@ -1,20 +1,26 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
+#![allow(unused_imports)]
+use actix_http::header::HeaderValue;
 use log::*;
 
+use actix::prelude::*;
+use actix::*;
+use actix::{Actor, StreamHandler};
+use actix_files::*;
+use actix_files::{Files, NamedFile};
+use actix_http::ws::Codec;
+use actix_web::dev::HttpServiceFactory;
+use actix_web::dev::Service;
+use actix_web::http::{header::CACHE_CONTROL, header::LOCATION};
+use actix_web::web::Bytes;
+use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use std::fs::File;
 use std::io::BufReader;
-use actix::prelude::*;
-use actix::{Actor, StreamHandler};
-use actix_files::Files;
-use actix_http::ws::Codec;
-use actix_service::Service;
-use actix_web::http::{header::CACHE_CONTROL, header::LOCATION, HeaderValue};
-use actix_web::web::Bytes;
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
+
 use actix_web_actors::ws;
-use rustls::internal::pemfile::{certs, pkcs8_private_keys};
-use rustls::{NoClientAuth, ServerConfig};
+
+use rustls::ServerConfig;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
@@ -85,14 +91,14 @@ impl Actor for Client {
             id: self.id,
             addr: addr.recipient(),
         };
-        if let Some(e) = self.coordinator.do_send(msg).err() {
+        if let Some(e) = self.coordinator.try_send(msg).err() {
             error!("Connecting error: {}", e);
         }
     }
 
     fn stopping(&mut self, _: &mut Self::Context) -> Running {
         let msg = CoordinatorMessage::Disconnect { id: self.id };
-        if let Some(e) = self.coordinator.do_send(msg).err() {
+        if let Some(e) = self.coordinator.try_send(msg).err() {
             error!("Disconnecting error: {}", e);
         }
         Running::Stop
@@ -110,19 +116,19 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for Client {
             }
             Ok(ws::Message::Text(text)) => {}
             Ok(ws::Message::Binary(bin)) => {
-                let key_frame = bin.get(0) != Some(&0);
+                let key_frame = bin.first() != Some(&0);
                 let mut total_data: Vec<u8> = Vec::new();
                 total_data.extend_from_slice(&self.id.to_le_bytes());
                 total_data.push(if key_frame { 1 } else { 0 });
                 total_data.extend_from_slice(&bin.as_ref()[1..]);
 
                 let video_chunk = VideoChunk {
-                    key_frame: key_frame,
+                    key_frame,
                     data: Bytes::from(total_data),
                 };
                 if let Some(e) = self
                     .coordinator
-                    .do_send(CoordinatorMessage::Video {
+                    .try_send(CoordinatorMessage::Video {
                         id: self.id,
                         chunk: video_chunk,
                     })
@@ -155,14 +161,14 @@ impl Handler<ClientMessage> for Client {
             ClientMessage::Connect { id } => {
                 let cmd = ClientCommand {
                     action: "connect",
-                    id: id,
+                    id,
                 };
                 ctx.text(serde_json::to_string(&cmd).unwrap());
             }
             ClientMessage::Disconnect { id } => {
                 let cmd = ClientCommand {
                     action: "disconnect",
-                    id: id,
+                    id,
                 };
                 ctx.text(serde_json::to_string(&cmd).unwrap());
             }
@@ -176,7 +182,7 @@ impl Coordinator {
             if *client_id == id {
                 continue;
             }
-            if let Some(e) = client.do_send(msg.clone()).err() {
+            if let Some(e) = client.try_send(msg.clone()).err() {
                 error!(
                     "Error sending message to client. id:{} error: {}",
                     client_id, e
@@ -195,24 +201,18 @@ impl Handler<CoordinatorMessage> for Coordinator {
                 info!("Client connected {}", id);
                 let existing_clients: Vec<u32> = self.clients.keys().cloned().collect();
                 self.clients.insert(id, addr.clone());
-                self.send_all_client_except_one(id, ClientMessage::Connect { id: id });
+                self.send_all_client_except_one(id, ClientMessage::Connect { id });
                 for id in existing_clients {
-                    let _ = addr.do_send(ClientMessage::Connect { id: id });
+                    let _ = addr.try_send(ClientMessage::Connect { id });
                 }
             }
             CoordinatorMessage::Disconnect { id } => {
                 info!("Client disconnected {}", id);
                 self.clients.remove(&id);
-                self.send_all_client_except_one(id, ClientMessage::Disconnect { id: id });
+                self.send_all_client_except_one(id, ClientMessage::Disconnect { id });
             }
             CoordinatorMessage::Video { id, chunk } => {
-                self.send_all_client_except_one(
-                    id,
-                    ClientMessage::Video {
-                        id: id,
-                        chunk: chunk,
-                    },
-                );
+                self.send_all_client_except_one(id, ClientMessage::Video { id, chunk });
             }
         }
     }
@@ -232,7 +232,7 @@ fn get_next_client_id() -> u32 {
 #[actix_web::get("/")]
 async fn redirect_to_spec() -> HttpResponse {
     HttpResponse::PermanentRedirect()
-        .header(LOCATION, "https://www.w3.org/TR/webcodecs/")
+        .append_header((LOCATION, "https://www.w3.org/TR/webcodecs/"))
         .finish()
 }
 
@@ -243,7 +243,7 @@ async fn vc_socket_route(
 ) -> Result<HttpResponse, Error> {
     let id = get_next_client_id();
     let actor = Client {
-        id: id,
+        id,
         coordinator: coordinator.get_ref().clone().recipient(),
     };
 
@@ -265,7 +265,8 @@ async fn main() -> std::io::Result<()> {
         .filter(None, LevelFilter::Info)
         .init();
 
-    let mut config = ServerConfig::new(NoClientAuth::new());
+    // let mut config = ServerConfig::builder().with_no_client_auth();
+    /*
     if Path::new("key.pem").exists() && Path::new("cert.pem").exists() {
         let cert_file = &mut BufReader::new(File::open("cert.pem")?);
         let key_file = &mut BufReader::new(File::open("key.pem")?);
@@ -274,7 +275,7 @@ async fn main() -> std::io::Result<()> {
         if keys.len() > 0 {
             config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
         }
-    }
+    }*/
 
     let mut coordinators: Vec<Addr<Coordinator>> = vec![];
     for i in 0..5 {
@@ -295,7 +296,7 @@ async fn main() -> std::io::Result<()> {
         for (i, coordinator) in coordinators.iter().enumerate() {
             app = app.service(
                 web::resource(format!("/vc-room{}/", i))
-                    .data(coordinator.clone())
+                    .app_data(coordinator.clone())
                     .to(vc_socket_route),
             );
         }
@@ -304,7 +305,7 @@ async fn main() -> std::io::Result<()> {
             .service(redirect_to_spec)
     })
     .bind(format!("0.0.0.0:{0}", port))?
-    .bind_rustls("0.0.0.0:443", config)?
+    //.bind_rustls("0.0.0.0:443", config)?
     .run()
     .await
 }
